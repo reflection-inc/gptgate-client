@@ -151,9 +151,12 @@ export default function ChatPage() {
     let fullText = '';
 
     try {
-      const res = await fetch('https://api.gptgate.online/api/chat/completions', {
+      const res = await fetch(process.env.NEXT_PUBLIC_GPT_API_URL!, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.NEXT_PUBLIC_API_KEY!,
+        },
         body: JSON.stringify({
           model,
           temperature,
