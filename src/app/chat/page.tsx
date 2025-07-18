@@ -1,6 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import ChatMessages from './ChatMessages';
+import ChatInput from './ChatInput';
+import ChatSettings from './ChatSettings';
+import ChatList from './ChatList';
 
 const STORAGE_KEY = 'chatSessions';
 const ACTIVE_KEY = 'activeChatId';
@@ -44,9 +48,31 @@ export default function ChatPage() {
   const [temperature, setTemperature] = useState(1.0);
   const [systemPrompt, setSystemPrompt] = useState('');
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const resetSession = () => {
+    const sessions = loadSessions();
+    const newSession: ChatSession = {
+      id: crypto.randomUUID(),
+      title: '新しいチャット',
+      messages: [],
+      systemPrompt: '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updatedSessions = [...sessions, newSession];
+    saveSessions(updatedSessions);
+    setSessions(updatedSessions); // ← セッション一覧の state も更新
+    setMessages([]);
+    setSystemPrompt('');
+    setCurrentSessionId(newSession.id);
+    setActiveSessionId(newSession.id);
+  };
 
   useEffect(() => {
     const sessions = loadSessions();
+    setSessions(sessions); //
+
     const activeId = loadActiveSessionId();
     const activeSession = sessions.find(s => s.id === activeId) || sessions[0];
 
@@ -64,12 +90,32 @@ export default function ChatPage() {
         updatedAt: new Date().toISOString(),
       };
       saveSessions([newSession]);
+      setSessions([newSession]);
       setMessages([]);
       setSystemPrompt('');
       setCurrentSessionId(newSession.id);
       setActiveSessionId(newSession.id);
     }
   }, []);
+
+  const deleteSession = (id: string) => {
+    const sessions = loadSessions().filter(s => s.id !== id);
+    saveSessions(sessions);
+
+    if (id === currentSessionId) {
+      const nextSession = sessions[0];
+      if (nextSession) {
+        setCurrentSessionId(nextSession.id);
+        setMessages(nextSession.messages);
+        setSystemPrompt(nextSession.systemPrompt);
+        setActiveSessionId(nextSession.id);
+      } else {
+        resetSession();
+      }
+    }
+
+    setSessions(sessions);
+  };
 
   const updateCurrentSession = (updates: Partial<ChatSession>) => {
     const sessions = loadSessions();
@@ -81,17 +127,7 @@ export default function ChatPage() {
         updatedAt: new Date().toISOString(),
       };
       saveSessions(sessions);
-    }
-  };
-
-  const handleSendMessage = (newMessage: ChatMessage) => {
-    const sessions = loadSessions();
-    const index = sessions.findIndex(s => s.id === currentSessionId);
-    if (index !== -1) {
-      sessions[index].messages.push(newMessage);
-      sessions[index].updatedAt = new Date().toISOString();
-      saveSessions(sessions);
-      setMessages(sessions[index].messages);
+      setSessions(sessions);
     }
   };
 
@@ -171,22 +207,34 @@ export default function ChatPage() {
       setLoading(false);
       setMessages(prev => {
         const updated = [...prev];
-
-        // 🔽 最後の assistant が空なら削除
         if (updated.length > 0 && updated[updated.length - 1].role === 'assistant' && fullText.trim() === '') {
-          updated.pop(); // ← 削除
+          updated.pop();
         } else {
           updated[updated.length - 1] = {
             ...updated[updated.length - 1],
             content: fullText,
           };
         }
+        const sessions = loadSessions();
+        const index = sessions.findIndex(s => s.id === currentSessionId);
+        if (index !== -1) {
+          const session = sessions[index];
+          if (!session.title || session.title === '新しいチャット') {
+            const firstUserMsg = updated.find(m => m.role === 'user')?.content || '';
+            sessions[index].title = firstUserMsg.slice(0, 20); // 長さは好みに応じて調整
+          }
 
-        updateCurrentSession({ messages: updated });
+          // 🔄 メッセージと一緒に保存・反映
+          sessions[index].messages = updated;
+          sessions[index].updatedAt = new Date().toISOString();
+          saveSessions(sessions);
+        }
+
         return updated;
       });
     }
-  }
+  };
+
   const handlePromptChange = (value: string) => {
     setSystemPrompt(value);
     updateCurrentSession({ systemPrompt: value });
@@ -194,76 +242,51 @@ export default function ChatPage() {
 
   return (
     <div className="max-w-xl mx-auto p-4">
+      <button
+        onClick={resetSession}
+        className="text-sm text-red-500 underline mb-4"
+      >
+        チャットをリセットする
+      </button>
       <h1 className="text-xl font-bold mb-4">gptgate Chat（ストリーム対応）</h1>
-      <div className="mb-4 flex items-center gap-2">
-        <label className="font-semibold">モデル選択：</label>
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          className="border rounded p-1"
-        >
-          <option value="gpt-4">gpt-4</option>
-          <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
-        </select>
-      </div>
-      <div className="mb-4">
-        <div className="flex items-center gap-2 mb-1">
-          <label className="font-semibold">Temperature：</label>
-          <a
-            href="/docs#temperature"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm text-blue-500 hover:underline"
-          >
-            temperatureとは？
-          </a>
-        </div>
-        <div className="flex items-center">
-          <input
-            type="range"
-            min="0"
-            max="2"
-            step="0.1"
-            value={temperature}
-            onChange={(e) => setTemperature(parseFloat(e.target.value))}
-            className="w-64 align-middle"
-          />
-          <span className="ml-2">{temperature.toFixed(1)}</span>
-        </div>
-      </div>
-      <div className="mb-4">
-        <label className="font-semibold mr-2">System Prompt：</label>
-        <textarea
-          value={systemPrompt}
-          onChange={(e) => handlePromptChange(e.target.value)}
-          className="w-full border p-2 rounded"
-          placeholder="例：あなたは優しい家庭教師です"
-          rows={2}
-        />
-      </div>
-      <div className="space-y-2 mb-4">
-        {messages.map((msg, i) => (
-          <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-blue-100' : 'bg-green-100'}`}>
-            <strong>{msg.role}：</strong> {msg.content}
-          </div>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          className="flex-1 border p-2 rounded"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="メッセージを入力..."
-        />
-        <button
-          onClick={sendMessage}
-          disabled={loading}
-          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:opacity-50"
-        >
-          {loading ? '送信中...' : '送信'}
-        </button>
-      </div>
+      <button
+        onClick={resetSession}
+        className="text-sm text-blue-500 underline mb-2"
+      >
+        新しいチャットを作成
+      </button>
+      <ChatList
+        sessions={sessions}
+        activeId={currentSessionId}
+        onSelect={(id) => {
+          const session = sessions.find(s => s.id === id);
+          if (session) {
+            setCurrentSessionId(id);
+            setMessages(session.messages);
+            setSystemPrompt(session.systemPrompt);
+            setActiveSessionId(id);
+          }
+        }}
+        onDelete={deleteSession}
+      />
+      <ChatSettings
+        model={model}
+        setModel={setModel}
+        temperature={temperature}
+        setTemperature={setTemperature}
+        systemPrompt={systemPrompt}
+        handlePromptChange={handlePromptChange}
+      />
+
+      <ChatMessages messages={messages} />
+
+      <ChatInput
+        input={input}
+        setInput={setInput}
+        sendMessage={sendMessage}
+        loading={loading}
+      />
+
       <p className="text-xs text-gray-500 mt-2">⌘+Enter または Ctrl+Enter で送信</p>
     </div>
   );
